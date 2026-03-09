@@ -1,8 +1,11 @@
 const config = require("./config");
 const db = require("./db");
-const { createMockResponse } = require("./mockProvider");
-const { createOpenAiCompatibleResponse } = require("./openAiCompatibleProvider");
-const { createGeminiResponse } = require("./geminiProvider");
+const { createMockResponse, streamMockResponse } = require("./mockProvider");
+const {
+  createOpenAiCompatibleResponse,
+  streamOpenAiCompatibleResponse
+} = require("./openAiCompatibleProvider");
+const { createGeminiResponse, streamGeminiResponse } = require("./geminiProvider");
 const { buildInitialMessages, buildIterationMessages } = require("./prompts");
 
 function publicAgent(agent) {
@@ -66,6 +69,72 @@ function sanitizeAgentError(error) {
   return "上游请求失败。";
 }
 
+function validateQuestion(questionInput) {
+  const question = normalizeQuestion(questionInput);
+
+  if (!question) {
+    throw badRequest("Question is required.");
+  }
+
+  if (question.length > 4000) {
+    throw badRequest("Question is too long. Please keep it within 4000 characters.");
+  }
+
+  return question;
+}
+
+function buildPeerContext(peerResponses) {
+  return peerResponses.map((item) => ({
+    agentId: item.agentId,
+    agentName: item.agentName,
+    excerpt: String(item.responseText || "").slice(0, 200)
+  }));
+}
+
+function buildMessages({ mode, question, previousSelfResponse, peerResponses }) {
+  return mode === "initial"
+    ? buildInitialMessages({ question })
+    : buildIterationMessages({
+        question,
+        previousSelfResponse,
+        peerResponses
+      });
+}
+
+function emitEvent(emit, event) {
+  if (typeof emit === "function") {
+    emit(event);
+  }
+}
+
+function buildSuccessPayload({ conversationId, roundId, agent, responseText, peerResponses }) {
+  return {
+    conversationId,
+    roundId,
+    agentId: agent.id,
+    agentName: agent.name,
+    model: agent.model,
+    status: "completed",
+    responseText,
+    errorMessage: null,
+    peerContext: buildPeerContext(peerResponses)
+  };
+}
+
+function buildFailurePayload({ conversationId, roundId, agent, peerResponses, errorMessage }) {
+  return {
+    conversationId,
+    roundId,
+    agentId: agent.id,
+    agentName: agent.name,
+    model: agent.model,
+    status: "failed",
+    responseText: `${agent.name} 当前未返回结果。`,
+    errorMessage,
+    peerContext: buildPeerContext(peerResponses)
+  };
+}
+
 async function runAgent(agent, messages, runtime) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
@@ -117,6 +186,57 @@ async function runAgent(agent, messages, runtime) {
   }
 }
 
+async function runAgentStream(agent, messages, runtime, onDelta) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+
+  try {
+    if (config.mockMode) {
+      return await streamMockResponse({
+        agent,
+        question: runtime.question,
+        roundNumber: runtime.roundNumber,
+        onDelta
+      });
+    }
+
+    if (!agent.configured) {
+      throw createConfigurationError(`Agent "${agent.name}" is not configured.`);
+    }
+
+    if (agent.provider === "openai-compatible") {
+      return await streamOpenAiCompatibleResponse({
+        agent,
+        messages,
+        signal: controller.signal,
+        onDelta
+      });
+    }
+
+    if (agent.provider === "gemini") {
+      return await streamGeminiResponse({
+        agent,
+        messages,
+        signal: controller.signal,
+        onDelta
+      });
+    }
+
+    if (agent.provider === "mock") {
+      return await streamMockResponse({
+        agent,
+        question: runtime.question,
+        roundNumber: runtime.roundNumber,
+        onDelta
+      });
+    }
+
+    throw new Error(`Unsupported provider "${agent.provider}".`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function executeRound({ conversationId, question, roundNumber, mode, previousResponses }) {
   const round = await db.createRound(conversationId, roundNumber, mode);
 
@@ -125,15 +245,12 @@ async function executeRound({ conversationId, question, roundNumber, mode, previ
     const peerResponses = previousResponses.filter(
       (item) => item.agentId !== agent.id && item.status === "completed"
     );
-
-    const messages =
-      mode === "initial"
-        ? buildInitialMessages({ question })
-        : buildIterationMessages({
-            question,
-            previousSelfResponse: previousSelf?.responseText || "",
-            peerResponses
-          });
+    const messages = buildMessages({
+      mode,
+      question,
+      previousSelfResponse: previousSelf?.responseText || "",
+      peerResponses
+    });
 
     try {
       const responseText = await runAgent(agent, messages, {
@@ -143,41 +260,24 @@ async function executeRound({ conversationId, question, roundNumber, mode, previ
         previousSelfResponse: previousSelf?.responseText || ""
       });
 
-      const payload = {
+      const payload = buildSuccessPayload({
         conversationId,
         roundId: round.id,
-        agentId: agent.id,
-        agentName: agent.name,
-        model: agent.model,
-        status: "completed",
+        agent,
         responseText,
-        errorMessage: null,
-        peerContext: peerResponses.map((item) => ({
-          agentId: item.agentId,
-          agentName: item.agentName,
-          excerpt: String(item.responseText || "").slice(0, 200)
-        }))
-      };
+        peerResponses
+      });
 
       await db.insertAgentResponse(payload);
       return payload;
     } catch (error) {
-      const userError = sanitizeAgentError(error);
-      const payload = {
+      const payload = buildFailurePayload({
         conversationId,
         roundId: round.id,
-        agentId: agent.id,
-        agentName: agent.name,
-        model: agent.model,
-        status: "failed",
-        responseText: `${agent.name} 当前未返回结果。`,
-        errorMessage: userError,
-        peerContext: peerResponses.map((item) => ({
-          agentId: item.agentId,
-          agentName: item.agentName,
-          excerpt: String(item.responseText || "").slice(0, 200)
-        }))
-      };
+        agent,
+        peerResponses,
+        errorMessage: sanitizeAgentError(error)
+      });
 
       await db.insertAgentResponse(payload);
       return payload;
@@ -192,52 +292,204 @@ async function executeRound({ conversationId, question, roundNumber, mode, previ
   };
 }
 
-async function createConversation(questionInput) {
-  const question = normalizeQuestion(questionInput);
+async function executeStreamingRound({
+  conversationId,
+  question,
+  roundNumber,
+  mode,
+  previousResponses,
+  emit
+}) {
+  const round = await db.createRound(conversationId, roundNumber, mode);
+  emitEvent(emit, {
+    type: "round.started",
+    round: {
+      roundNumber,
+      mode
+    }
+  });
 
-  if (!question) {
-    throw badRequest("Question is required.");
-  }
+  const jobs = config.agents.map(async (agent) => {
+    const previousSelf = previousResponses.find((item) => item.agentId === agent.id);
+    const peerResponses = previousResponses.filter(
+      (item) => item.agentId !== agent.id && item.status === "completed"
+    );
+    const messages = buildMessages({
+      mode,
+      question,
+      previousSelfResponse: previousSelf?.responseText || "",
+      peerResponses
+    });
 
-  if (question.length > 4000) {
-    throw badRequest("Question is too long. Please keep it within 4000 characters.");
-  }
+    emitEvent(emit, {
+      type: "response.started",
+      roundNumber,
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        model: agent.model
+      }
+    });
 
+    try {
+      const responseText = await runAgentStream(
+        agent,
+        messages,
+        {
+          question,
+          roundNumber,
+          peerResponses,
+          previousSelfResponse: previousSelf?.responseText || ""
+        },
+        (delta) => {
+          emitEvent(emit, {
+            type: "response.delta",
+            roundNumber,
+            agentId: agent.id,
+            delta
+          });
+        }
+      );
+
+      const payload = buildSuccessPayload({
+        conversationId,
+        roundId: round.id,
+        agent,
+        responseText,
+        peerResponses
+      });
+
+      await db.insertAgentResponse(payload);
+      emitEvent(emit, {
+        type: "response.completed",
+        roundNumber,
+        agentId: agent.id,
+        response: {
+          agentId: payload.agentId,
+          agentName: payload.agentName,
+          model: payload.model,
+          status: payload.status,
+          responseText: payload.responseText,
+          errorMessage: payload.errorMessage
+        }
+      });
+      return payload;
+    } catch (error) {
+      const payload = buildFailurePayload({
+        conversationId,
+        roundId: round.id,
+        agent,
+        peerResponses,
+        errorMessage: sanitizeAgentError(error)
+      });
+
+      await db.insertAgentResponse(payload);
+      emitEvent(emit, {
+        type: "response.failed",
+        roundNumber,
+        agentId: agent.id,
+        response: {
+          agentId: payload.agentId,
+          agentName: payload.agentName,
+          model: payload.model,
+          status: payload.status,
+          responseText: payload.responseText,
+          errorMessage: payload.errorMessage
+        }
+      });
+      return payload;
+    }
+  });
+
+  const responses = await Promise.all(jobs);
+  const hasFailures = responses.some((item) => item.status !== "completed");
+
+  emitEvent(emit, {
+    type: "round.completed",
+    round: {
+      roundNumber,
+      mode,
+      hasFailures
+    }
+  });
+
+  return {
+    round,
+    responses,
+    hasFailures
+  };
+}
+
+async function runConversationWorkflow(questionInput, emit) {
+  const question = validateQuestion(questionInput);
   const conversation = await db.createConversation(question);
+
   await db.updateConversationStatus(conversation.id, "running");
+
+  emitEvent(emit, {
+    type: "conversation.created",
+    conversation: {
+      ...conversation,
+      status: "running",
+      totalRounds: 0,
+      rounds: []
+    }
+  });
 
   let hasFailures = false;
   let finalStatus = "completed";
 
   try {
-    const initialResult = await executeRound({
+    const execute = emit ? executeStreamingRound : executeRound;
+
+    const initialResult = await execute({
       conversationId: conversation.id,
       question,
       roundNumber: 1,
       mode: "initial",
-      previousResponses: []
+      previousResponses: [],
+      emit
     });
 
     hasFailures = hasFailures || initialResult.hasFailures;
 
-    const refinementResult = await executeRound({
+    const refinementResult = await execute({
       conversationId: conversation.id,
       question,
       roundNumber: 2,
       mode: "iteration",
-      previousResponses: initialResult.responses
+      previousResponses: initialResult.responses,
+      emit
     });
 
     hasFailures = hasFailures || refinementResult.hasFailures;
     finalStatus = hasFailures ? "completed_with_errors" : "completed";
   } catch (error) {
     finalStatus = "failed";
+    emitEvent(emit, {
+      type: "conversation.failed",
+      error: error.message || "Unexpected server error."
+    });
     throw error;
   } finally {
     await db.updateConversationStatus(conversation.id, finalStatus);
   }
 
-  return db.getConversationById(conversation.id);
+  const finalConversation = await db.getConversationById(conversation.id);
+  emitEvent(emit, {
+    type: "conversation.completed",
+    conversation: finalConversation
+  });
+
+  return finalConversation;
+}
+
+async function createConversation(questionInput) {
+  return runConversationWorkflow(questionInput);
+}
+
+async function streamConversation(questionInput, emit) {
+  return runConversationWorkflow(questionInput, emit);
 }
 
 async function iterateConversation(conversationId, requestedRounds) {
@@ -296,6 +548,7 @@ function getAgents() {
 
 module.exports = {
   createConversation,
+  streamConversation,
   iterateConversation,
   listConversations,
   getConversationById,

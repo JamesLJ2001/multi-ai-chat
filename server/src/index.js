@@ -63,6 +63,38 @@ app.post(
   })
 );
 
+app.post("/api/conversations/stream", async (req, res, next) => {
+  res.status(201);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+
+  if (typeof res.flushHeaders === "function") {
+    res.flushHeaders();
+  }
+
+  const send = (event) => {
+    if (res.writableEnded) {
+      return;
+    }
+
+    res.write(`${JSON.stringify(event)}\n`);
+  };
+
+  try {
+    await chatService.streamConversation(req.body?.question, send);
+  } catch (error) {
+    send({
+      type: "error",
+      error: error.message || "Unexpected server error."
+    });
+    console.error("Streaming conversation failed:", error);
+  }
+
+  res.end();
+});
+
 app.post(
   "/api/conversations/:conversationId/iterate",
   asyncHandler(async (req, res) => {

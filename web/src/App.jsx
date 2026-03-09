@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 
 const defaultAgents = [
   { id: "deepseek", name: "DeepSeek", accentColor: "#246b4f", model: "deepseek-reasoner" },
@@ -24,24 +24,175 @@ async function request(path, options = {}) {
   return payload;
 }
 
-function buildResponseMap(round) {
-  return new Map((round?.responses || []).map((response) => [response.agentId, response]));
+function createRound(roundNumber, mode) {
+  return {
+    roundNumber,
+    mode,
+    responses: []
+  };
+}
+
+function createPendingConversation(question) {
+  return {
+    id: null,
+    title: question,
+    question,
+    status: "running",
+    totalRounds: 2,
+    rounds: [createRound(1, "initial"), createRound(2, "iteration")]
+  };
+}
+
+function cloneConversation(conversation) {
+  if (!conversation) {
+    return null;
+  }
+
+  return {
+    ...conversation,
+    rounds: (conversation.rounds || []).map((round) => ({
+      ...round,
+      responses: (round.responses || []).map((response) => ({ ...response }))
+    }))
+  };
+}
+
+function ensureRound(conversation, roundNumber, mode) {
+  let round = conversation.rounds.find((item) => item.roundNumber === roundNumber);
+
+  if (!round) {
+    round = createRound(roundNumber, mode || "initial");
+    conversation.rounds.push(round);
+    conversation.rounds.sort((left, right) => left.roundNumber - right.roundNumber);
+  }
+
+  if (mode) {
+    round.mode = mode;
+  }
+
+  return round;
+}
+
+function ensureResponse(round, agent) {
+  let response = round.responses.find((item) => item.agentId === agent.id);
+
+  if (!response) {
+    response = {
+      agentId: agent.id,
+      agentName: agent.name,
+      model: agent.model,
+      status: "running",
+      responseText: "",
+      errorMessage: null
+    };
+    round.responses.push(response);
+  }
+
+  return response;
+}
+
+function appendCharacters(conversation, updates) {
+  if (!conversation) {
+    return conversation;
+  }
+
+  const nextConversation = cloneConversation(conversation);
+
+  for (const update of updates) {
+    const round = nextConversation.rounds.find((item) => item.roundNumber === update.roundNumber);
+
+    if (!round) {
+      continue;
+    }
+
+    const response = round.responses.find((item) => item.agentId === update.agentId);
+
+    if (!response) {
+      continue;
+    }
+
+    response.responseText = `${response.responseText || ""}${update.char}`;
+  }
+
+  return nextConversation;
+}
+
+function applyStreamEvent(conversation, event) {
+  const baseConversation =
+    cloneConversation(conversation) ||
+    createPendingConversation(event?.conversation?.question || "");
+
+  switch (event.type) {
+    case "conversation.created":
+      return {
+        ...baseConversation,
+        ...event.conversation,
+        rounds: baseConversation.rounds?.length ? baseConversation.rounds : event.conversation.rounds || []
+      };
+    case "round.started": {
+      ensureRound(baseConversation, event.round.roundNumber, event.round.mode);
+      return baseConversation;
+    }
+    case "response.started": {
+      const round = ensureRound(baseConversation, event.roundNumber, null);
+      const response = ensureResponse(round, event.agent);
+      response.agentName = event.agent.name;
+      response.model = event.agent.model;
+      response.status = "running";
+      response.errorMessage = null;
+      return baseConversation;
+    }
+    case "response.completed": {
+      const round = ensureRound(baseConversation, event.roundNumber, null);
+      const response = ensureResponse(round, {
+        id: event.agentId,
+        name: event.response.agentName,
+        model: event.response.model
+      });
+      response.agentName = event.response.agentName;
+      response.model = event.response.model;
+      response.status = event.response.status;
+      response.errorMessage = event.response.errorMessage;
+
+      if (!response.responseText) {
+        response.responseText = event.response.responseText;
+      }
+
+      return baseConversation;
+    }
+    case "response.failed": {
+      const round = ensureRound(baseConversation, event.roundNumber, null);
+      const response = ensureResponse(round, {
+        id: event.agentId,
+        name: event.response.agentName,
+        model: event.response.model
+      });
+      response.agentName = event.response.agentName;
+      response.model = event.response.model;
+      response.status = event.response.status;
+      response.errorMessage = event.response.errorMessage;
+
+      if (!response.responseText) {
+        response.responseText = event.response.responseText;
+      }
+
+      return baseConversation;
+    }
+    default:
+      return baseConversation;
+  }
 }
 
 function getRoundTitle(round) {
-  if (round.mode === "initial") {
-    return `第 ${round.roundNumber} 轮`;
-  }
-
   return `第 ${round.roundNumber} 轮`;
 }
 
 function getRoundSubtitle(round) {
   if (round.mode === "initial") {
-    return "先独立回答";
+    return "先各自独立回答";
   }
 
-  return "参考另外两份回答后再次作答";
+  return "读取另外两份回答后再次回答";
 }
 
 function getPlaceholder(round, loading) {
@@ -50,19 +201,21 @@ function getPlaceholder(round, loading) {
   }
 
   if (round.mode === "initial") {
-    return "正在生成第一轮回答...";
+    return "这一轮正在实时生成...";
   }
 
-  return "第一轮完成后，会在下面生成这一轮...";
+  return "这一轮会在第 1 轮结束后，继续在下面实时生成...";
 }
 
 function AnswerCard({ agent, response, round, loading }) {
   const stateLabel = response
     ? response.status === "completed"
       ? "Done"
-      : "Error"
+      : response.status === "failed"
+        ? "Error"
+        : "Live"
     : loading
-      ? "Thinking"
+      ? "Waiting"
       : "Idle";
 
   return (
@@ -90,8 +243,6 @@ function AnswerCard({ agent, response, round, loading }) {
 }
 
 function RoundSection({ round, agents, loading }) {
-  const responseMap = buildResponseMap(round);
-
   return (
     <section className="round-section">
       <header className="round-head">
@@ -100,15 +251,19 @@ function RoundSection({ round, agents, loading }) {
       </header>
 
       <div className="answers-grid">
-        {agents.map((agent) => (
-          <AnswerCard
-            key={`${round.roundNumber}-${agent.id}`}
-            agent={agent}
-            response={responseMap.get(agent.id)}
-            round={round}
-            loading={loading}
-          />
-        ))}
+        {agents.map((agent) => {
+          const response = (round.responses || []).find((item) => item.agentId === agent.id) || null;
+
+          return (
+            <AnswerCard
+              key={`${round.roundNumber}-${agent.id}`}
+              agent={agent}
+              response={response}
+              round={round}
+              loading={loading}
+            />
+          );
+        })}
       </div>
     </section>
   );
@@ -122,6 +277,108 @@ export default function App() {
   const [error, setError] = useState("");
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [animating, setAnimating] = useState(false);
+
+  const pendingCharsRef = useRef(new Map());
+  const flushTimerRef = useRef(null);
+  const finalConversationRef = useRef(null);
+  const streamControllerRef = useRef(null);
+
+  function stopFlushTimer() {
+    if (flushTimerRef.current) {
+      clearInterval(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+
+    setAnimating(false);
+  }
+
+  function ensureFlushTimer() {
+    if (flushTimerRef.current) {
+      return;
+    }
+
+    setAnimating(true);
+    flushTimerRef.current = setInterval(() => {
+      const updates = [];
+
+      for (const [key, queue] of pendingCharsRef.current.entries()) {
+        if (!queue) {
+          pendingCharsRef.current.delete(key);
+          continue;
+        }
+
+        const char = queue[0];
+        const rest = queue.slice(1);
+        const [roundNumber, agentId] = key.split(":");
+
+        updates.push({
+          roundNumber: Number(roundNumber),
+          agentId,
+          char
+        });
+
+        if (rest) {
+          pendingCharsRef.current.set(key, rest);
+        } else {
+          pendingCharsRef.current.delete(key);
+        }
+      }
+
+      if (updates.length > 0) {
+        startTransition(() => {
+          setConversation((current) => appendCharacters(current, updates));
+        });
+      }
+
+      if (pendingCharsRef.current.size === 0) {
+        stopFlushTimer();
+
+        if (finalConversationRef.current) {
+          const finalConversation = finalConversationRef.current;
+          finalConversationRef.current = null;
+          startTransition(() => {
+            setConversation(finalConversation);
+          });
+        }
+      }
+    }, 14);
+  }
+
+  function queueDelta(roundNumber, agentId, delta) {
+    const key = `${roundNumber}:${agentId}`;
+    pendingCharsRef.current.set(key, `${pendingCharsRef.current.get(key) || ""}${delta}`);
+    ensureFlushTimer();
+  }
+
+  function handleStreamEvent(event) {
+    if (event.type === "response.delta") {
+      queueDelta(event.roundNumber, event.agentId, event.delta);
+      return;
+    }
+
+    if (event.type === "conversation.completed") {
+      finalConversationRef.current = event.conversation;
+
+      if (pendingCharsRef.current.size === 0) {
+        startTransition(() => {
+          setConversation(event.conversation);
+        });
+        finalConversationRef.current = null;
+      }
+
+      return;
+    }
+
+    if (event.type === "error" || event.type === "conversation.failed") {
+      setError(event.error || "生成失败。");
+      return;
+    }
+
+    startTransition(() => {
+      setConversation((current) => applyStreamEvent(current, event));
+    });
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -156,6 +413,14 @@ export default function App() {
 
     return () => {
       disposed = true;
+
+      if (streamControllerRef.current) {
+        streamControllerRef.current.abort();
+      }
+
+      pendingCharsRef.current.clear();
+      finalConversationRef.current = null;
+      stopFlushTimer();
     };
   }, []);
 
@@ -163,48 +428,111 @@ export default function App() {
     event.preventDefault();
 
     const nextQuestion = question.trim();
+
     if (!nextQuestion) {
       return;
     }
 
+    if (streamControllerRef.current) {
+      streamControllerRef.current.abort();
+    }
+
+    pendingCharsRef.current.clear();
+    finalConversationRef.current = null;
+    stopFlushTimer();
     setSubmitting(true);
     setError("");
-    setConversation(null);
     setActiveQuestion(nextQuestion);
+    setConversation(createPendingConversation(nextQuestion));
+
+    const controller = new AbortController();
+    streamControllerRef.current = controller;
 
     try {
-      const payload = await request("/api/conversations", {
+      const response = await fetch("/api/conversations/stream", {
         method: "POST",
-        body: JSON.stringify({ question: nextQuestion })
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ question: nextQuestion }),
+        signal: controller.signal
       });
 
+      if (!response.ok || !response.body) {
+        const message = await response.text().catch(() => "");
+        throw new Error(message || "Request failed.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          buffer += decoder.decode();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+
+          if (!line) {
+            continue;
+          }
+
+          try {
+            handleStreamEvent(JSON.parse(line));
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        try {
+          handleStreamEvent(JSON.parse(buffer.trim()));
+        } catch (error) {
+          // ignore trailing malformed chunks
+        }
+      }
+
       startTransition(() => {
-        setConversation(payload.conversation);
         setQuestion("");
       });
     } catch (submitError) {
-      setError(submitError.message);
+      if (submitError.name !== "AbortError") {
+        setError(submitError.message || "生成失败。");
+      }
     } finally {
+      streamControllerRef.current = null;
       setSubmitting(false);
+
+      if (pendingCharsRef.current.size === 0 && finalConversationRef.current) {
+        const finalConversation = finalConversationRef.current;
+        finalConversationRef.current = null;
+        startTransition(() => {
+          setConversation(finalConversation);
+        });
+      }
     }
   }
 
   const shownQuestion = conversation?.question || activeQuestion;
-  const visibleRounds = conversation?.rounds?.length
-    ? conversation.rounds
-    : submitting
-      ? [
-          { roundNumber: 1, mode: "initial", responses: [] },
-          { roundNumber: 2, mode: "iteration", responses: [] }
-        ]
-      : [];
+  const visibleRounds = conversation?.rounds?.length ? conversation.rounds : [];
+  const isBusy = submitting || animating;
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">multi-ai-chat</div>
         <div className="topbar-status">
-          {submitting ? "正在生成 3 个最终回答" : loadingAgents ? "加载模型中" : "两轮自动协作"}
+          {isBusy ? "实时生成中" : loadingAgents ? "加载模型中" : "两轮实时协作"}
         </div>
       </header>
 
@@ -218,7 +546,7 @@ export default function App() {
               key={`${round.roundNumber}-${round.mode}`}
               round={round}
               agents={agents}
-              loading={submitting}
+              loading={isBusy}
             />
           ))
         ) : (
@@ -228,7 +556,7 @@ export default function App() {
                 key={`idle-${agent.id}`}
                 agent={agent}
                 response={null}
-                round={{ roundNumber: 1, mode: "initial" }}
+                round={createRound(1, "initial")}
                 loading={false}
               />
             ))}
@@ -242,19 +570,19 @@ export default function App() {
             id="question"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="输入问题，系统会让 3 个模型先各答一轮，再互相参考后输出最终答案。"
+            placeholder="输入问题，三个模型会先各答一轮，再继续生成第二轮答案。"
             rows={3}
             maxLength={4000}
-            disabled={submitting}
+            disabled={isBusy}
           />
           <div className="composer-actions">
             <span className="composer-meta">{question.length}/4000</span>
             <button
               className="send-button"
               type="submit"
-              disabled={submitting || !question.trim()}
+              disabled={isBusy || !question.trim()}
             >
-              {submitting ? "生成中..." : "发送"}
+              {isBusy ? "生成中..." : "发送"}
             </button>
           </div>
         </label>

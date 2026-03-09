@@ -1,26 +1,26 @@
 const MODEL_VARIANTS = {
   deepseek: {
-    initialLead: "最稳妥的方案是先做核心，再处理风险点。",
-    refinedLead: "最终建议是优先解决最容易卡住上线的部分。",
-    closing: "把风险提前处理，后续返工会少很多。"
+    initialLead: "我先直接回答你。",
+    refinedLead: "我结合另外两份回答后，更新一下答案。",
+    closing: "如果你想继续展开，我可以接着往下说。"
   },
   gemini: {
-    initialLead: "可以直接按一个清晰的顺序推进。",
-    refinedLead: "更简洁的做法是把步骤压缩成一条最短路径。",
-    closing: "顺序清楚，执行成本会显著下降。"
+    initialLead: "直接说重点。",
+    refinedLead: "我再把答案补充得更完整一点。",
+    closing: "如果你要更短或更细，我都可以改。"
   },
   grok: {
-    initialLead: "先把结论压缩到最短执行路径，效率最高。",
-    refinedLead: "更新后的建议是把步骤再收紧，减少无关动作。",
-    closing: "路径越短，落地速度越快。"
+    initialLead: "先给你一个直接版本。",
+    refinedLead: "我参考完另外两份回答后，再给你一个更稳的版本。",
+    closing: "如果你想让我更直接一点，也可以继续压缩。"
   }
 };
 
 function getVariant(agent) {
   return MODEL_VARIANTS[agent.id] || {
-    initialLead: "结论：直接先做核心部分。",
-    refinedLead: "结论：把步骤进一步压缩，先解决关键问题。",
-    closing: "先完成主流程，再做细节优化。"
+    initialLead: "我先直接回答。",
+    refinedLead: "我更新一下答案。",
+    closing: "如果需要，我可以继续展开。"
   };
 }
 
@@ -30,14 +30,24 @@ function createMockResponse({ agent, question, roundNumber }) {
 
   return [
     lead,
-    `针对“${question}”，建议直接这样做：`,
-    "1. 先明确目标、边界和验收标准，只保留当前必须要做的部分。",
-    "2. 立刻完成最核心的主流程，让结果尽快可运行、可验证、可展示。",
-    "3. 用真实反馈继续补充剩余功能、性能优化和异常处理。",
+    `关于“${question}”，我现在给的是演示用 mock 回答，不是真实模型输出。`,
+    "如果你已经配好真实 provider，正常情况下这里会是一边生成一边出现的真实内容。",
     variant.closing
   ].join("\n");
 }
 
+async function streamMockResponse({ agent, question, roundNumber, onDelta }) {
+  const text = createMockResponse({ agent, question, roundNumber });
+
+  for (const char of text) {
+    onDelta(char);
+    await new Promise((resolve) => setTimeout(resolve, 8));
+  }
+
+  return text;
+}
+
 module.exports = {
-  createMockResponse
+  createMockResponse,
+  streamMockResponse
 };
