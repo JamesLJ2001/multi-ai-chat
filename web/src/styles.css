@@ -63,6 +63,7 @@ textarea {
 
 .question-strip,
 .answer-card,
+.round-section,
 .composer-shell,
 .error-banner {
   background: #ffffff;
@@ -86,6 +87,40 @@ textarea {
   border-color: rgba(180, 35, 24, 0.18);
 }
 
+.rounds-stack {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.round-section {
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.round-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.round-head h2,
+.round-head p {
+  margin: 0;
+}
+
+.round-head h2 {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.round-head p {
+  color: #6b7280;
+  font-size: 0.92rem;
+}
+
 .answers-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -94,7 +129,7 @@ textarea {
 }
 
 .answer-card {
-  min-height: 460px;
+  min-height: 360px;
   padding: 18px;
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -248,6 +283,11 @@ textarea {
 
   .composer-shell {
     padding: 14px;
+  }
+
+  .round-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .composer-actions {

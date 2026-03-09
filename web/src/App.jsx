@@ -24,23 +24,42 @@ async function request(path, options = {}) {
   return payload;
 }
 
-function getLatestRound(conversation) {
-  if (!conversation?.rounds?.length) {
-    return null;
+function buildResponseMap(round) {
+  return new Map((round?.responses || []).map((response) => [response.agentId, response]));
+}
+
+function getRoundTitle(round) {
+  if (round.mode === "initial") {
+    return `第 ${round.roundNumber} 轮`;
   }
 
-  return conversation.rounds[conversation.rounds.length - 1];
+  return `第 ${round.roundNumber} 轮`;
 }
 
-function buildResponseMap(conversation) {
-  const latestRound = getLatestRound(conversation);
-  return new Map((latestRound?.responses || []).map((response) => [response.agentId, response]));
+function getRoundSubtitle(round) {
+  if (round.mode === "initial") {
+    return "先独立回答";
+  }
+
+  return "参考另外两份回答后再次作答";
 }
 
-function AnswerCard({ agent, response, loading }) {
+function getPlaceholder(round, loading) {
+  if (!loading) {
+    return "等待提问";
+  }
+
+  if (round.mode === "initial") {
+    return "正在生成第一轮回答...";
+  }
+
+  return "第一轮完成后，会在下面生成这一轮...";
+}
+
+function AnswerCard({ agent, response, round, loading }) {
   const stateLabel = response
     ? response.status === "completed"
-      ? "Final"
+      ? "Done"
       : "Error"
     : loading
       ? "Thinking"
@@ -62,10 +81,35 @@ function AnswerCard({ agent, response, loading }) {
       {response ? (
         <pre className="answer-text">{response.responseText}</pre>
       ) : (
-        <div className="answer-placeholder">{loading ? "正在结合另外两个回答生成最终答案..." : "等待提问"}</div>
+        <div className="answer-placeholder">{getPlaceholder(round, loading)}</div>
       )}
 
       {response?.errorMessage ? <p className="answer-error">{response.errorMessage}</p> : null}
+    </section>
+  );
+}
+
+function RoundSection({ round, agents, loading }) {
+  const responseMap = buildResponseMap(round);
+
+  return (
+    <section className="round-section">
+      <header className="round-head">
+        <h2>{getRoundTitle(round)}</h2>
+        <p>{getRoundSubtitle(round)}</p>
+      </header>
+
+      <div className="answers-grid">
+        {agents.map((agent) => (
+          <AnswerCard
+            key={`${round.roundNumber}-${agent.id}`}
+            agent={agent}
+            response={responseMap.get(agent.id)}
+            round={round}
+            loading={loading}
+          />
+        ))}
+      </div>
     </section>
   );
 }
@@ -145,8 +189,15 @@ export default function App() {
     }
   }
 
-  const responseMap = buildResponseMap(conversation);
   const shownQuestion = conversation?.question || activeQuestion;
+  const visibleRounds = conversation?.rounds?.length
+    ? conversation.rounds
+    : submitting
+      ? [
+          { roundNumber: 1, mode: "initial", responses: [] },
+          { roundNumber: 2, mode: "iteration", responses: [] }
+        ]
+      : [];
 
   return (
     <div className="app-shell">
@@ -160,15 +211,29 @@ export default function App() {
       {shownQuestion ? <section className="question-strip">{shownQuestion}</section> : null}
       {error ? <div className="error-banner">{error}</div> : null}
 
-      <main className="answers-grid">
-        {agents.map((agent) => (
-          <AnswerCard
-            key={agent.id}
-            agent={agent}
-            response={responseMap.get(agent.id)}
-            loading={submitting}
-          />
-        ))}
+      <main className="rounds-stack">
+        {visibleRounds.length > 0 ? (
+          visibleRounds.map((round) => (
+            <RoundSection
+              key={`${round.roundNumber}-${round.mode}`}
+              round={round}
+              agents={agents}
+              loading={submitting}
+            />
+          ))
+        ) : (
+          <div className="answers-grid">
+            {agents.map((agent) => (
+              <AnswerCard
+                key={`idle-${agent.id}`}
+                agent={agent}
+                response={null}
+                round={{ roundNumber: 1, mode: "initial" }}
+                loading={false}
+              />
+            ))}
+          </div>
+        )}
       </main>
 
       <form className="composer" onSubmit={handleSubmit}>
