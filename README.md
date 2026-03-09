@@ -6,9 +6,9 @@
 
 - 同一个问题并发发送给多个 AI 代理。
 - 首轮回答完成后，把每个代理的回答作为同伴上下文发回给其他代理，继续迭代。
-- 用户可以在前端继续追加迭代轮次。
+- 当前界面固定展示 3 个最终回答卡片。
 - 前后端分离，Nginx 同源反代 `/api/`，支持 Docker Compose 一键启动。
-- 预置 `mock` 代理，未配置真实 API Key 时也能完整演示流程。
+- 未配置真实 API Key 时自动回退到内置 `mock` 响应。
 
 ## 技术栈
 
@@ -59,24 +59,37 @@ docker compose --profile deploy up -d --build
 
 ## 真实模型配置
 
-项目默认会加载内置 `mock` 代理，所以即使没有 API Key 也能跑通。
+项目默认固定为 `DeepSeek + Gemini + Grok` 三个代理。
 
-如果要切换成真实模型，在根目录 `.env` 中设置 `AI_AGENTS_JSON`。后端支持 OpenAI 兼容接口：
+如果根目录 `.env` 里 3 个 key 都为空，后端会自动回退到内置 `mock` 响应，便于本地演示。
+
+如果要切换成真实模型，在根目录 `.env` 中设置本地密钥：
 
 ```env
-AI_AGENTS_JSON=[{"id":"openai","name":"GPT-4.1 Mini","provider":"openai-compatible","baseUrl":"https://api.openai.com/v1","apiKey":"sk-xxx","model":"gpt-4.1-mini","role":"Generalist","systemPrompt":"擅长给出平衡方案。"},{"id":"deepseek","name":"DeepSeek Chat","provider":"openai-compatible","baseUrl":"https://api.deepseek.com/v1","apiKey":"sk-xxx","model":"deepseek-chat","role":"Challenger","systemPrompt":"擅长发现隐藏风险。"},{"id":"qwen","name":"Qwen Max","provider":"openai-compatible","baseUrl":"https://dashscope.aliyuncs.com/compatible-mode/v1","apiKey":"sk-xxx","model":"qwen-max","role":"Synthesizer","systemPrompt":"擅长综合同伴观点。"}]
+DEEPSEEK_API_KEY=your-local-key
+GEMINI_API_KEY=your-local-key
+XAI_API_KEY=your-local-key
+
+DEEPSEEK_MODEL=deepseek-reasoner
+GEMINI_MODEL=gemini-2.5-pro
+XAI_MODEL=grok-3
 ```
 
 说明：
 
+- 真实密钥只放在未跟踪的本地 `.env`，不要写进仓库。
+- `GET /api/agents` 不会返回 `apiKey`、`baseUrl`、`systemPrompt` 之类内部配置。
+- 如果只配置了部分 key，已配置的代理会正常回答，未配置的卡片会单独报错。
 - 前端请求必须始终使用 `/api/...`。
 - 真实域名和协议不应写死在前端代码里。
 - 若担心缓存，可在前端额外追加 `?t=${Date.now()}`。
 
+如果你要做高级覆盖，仍然可以在 `.env` 中设置 `AI_AGENTS_JSON`，但公开示例只应使用 `apiKeyEnv` 引用本地环境变量，而不是把密钥内联到 JSON 里。
+
 ## 主要 API
 
 - `GET /api/health`
-- `GET /api/agents`
+- `GET /api/agents`：只返回 `id`、`name`、`provider`、`model`、`accentColor`、`configured`
 - `GET /api/conversations`
 - `GET /api/conversations/:conversationId`
 - `POST /api/conversations`

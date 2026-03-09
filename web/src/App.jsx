@@ -1,9 +1,9 @@
 import { startTransition, useEffect, useState } from "react";
 
 const defaultAgents = [
-  { id: "chatgpt", name: "ChatGPT", accentColor: "#111111", model: "gpt-4.1-mini" },
-  { id: "gemini", name: "Gemini", accentColor: "#4c6fff", model: "gemini-2.0-flash" },
-  { id: "deepseek", name: "DeepSeek", accentColor: "#246b4f", model: "deepseek-chat" }
+  { id: "deepseek", name: "DeepSeek", accentColor: "#246b4f", model: "deepseek-reasoner" },
+  { id: "gemini", name: "Gemini", accentColor: "#4c6fff", model: "gemini-2.5-pro" },
+  { id: "grok", name: "Grok", accentColor: "#111111", model: "grok-3" }
 ];
 
 async function request(path, options = {}) {
@@ -177,7 +177,7 @@ export default function App() {
             id="question"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="输入问题，系统会先让 3 个模型各答一轮，再互相读取另外两个回答后给出最终版本。"
+            placeholder="输入问题，系统会让 3 个模型先各答一轮，再互相参考后输出最终答案。"
             rows={3}
             maxLength={4000}
             disabled={submitting}
