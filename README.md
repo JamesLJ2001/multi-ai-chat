@@ -51,6 +51,12 @@ docker compose up -d --build
 
 3. 打开 `http://localhost:8080`。
 
+如果你要让当前项目自己接管 Cloudflare Tunnel，在本地导出 `CLOUDFLARED_TOKEN` 后使用：
+
+```bash
+docker compose --profile deploy up -d --build
+```
+
 ## 真实模型配置
 
 项目默认会加载内置 `mock` 代理，所以即使没有 API Key 也能跑通。
@@ -109,18 +115,20 @@ git commit -m "feat(app): bootstrap multi-ai chat platform"
 ## Cloudflare Tunnel 发布
 
 1. 先确认 `docker compose up -d --build` 后，宿主机 `http://localhost:8080` 可访问。
-2. 在 Cloudflare Zero Trust 创建 Tunnel。
-3. 在宿主机安装并启动 `cloudflared`。
+2. 在 Cloudflare Zero Trust 创建 Tunnel，或复用现有 Tunnel。
+3. 二选一启动 connector：
+   - 宿主机安装并启动 `cloudflared`
+   - 或者在本项目里设置 `CLOUDFLARED_TOKEN`，再执行 `docker compose --profile deploy up -d`
 4. 在 Public Hostname 中把你的域名映射到：
 
 ```text
-http://localhost:8080
+http://frontend:80
 ```
 
 链路如下：
 
 ```text
-User -> Cloudflare Edge -> Cloudflare Tunnel -> localhost:8080 -> Docker Nginx -> /api -> backend
+User -> Cloudflare Edge -> Cloudflare Tunnel -> frontend:80 -> Docker Nginx -> /api -> backend
 ```
 
 ## 开发说明

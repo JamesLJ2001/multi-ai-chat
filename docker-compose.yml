@@ -49,6 +49,23 @@ services:
       - app-network
     restart: always
 
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - deploy
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CLOUDFLARED_TOKEN:-missing-token}
+    depends_on:
+      frontend:
+        condition: service_started
+    networks:
+      - app-network
+    restart: always
+
 volumes:
   pgdata:
 
