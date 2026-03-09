@@ -4,33 +4,41 @@ const dotenv = require("dotenv");
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
-const FALLBACK_AGENTS = [
+const DEFAULT_AGENT_PRESETS = [
   {
-    id: "chatgpt",
-    name: "ChatGPT",
-    provider: "mock",
-    model: "gpt-4.1-mini",
+    id: "deepseek",
+    name: "DeepSeek",
+    provider: "openai-compatible",
+    baseUrl: "https://api.deepseek.com/v1",
+    modelEnv: "DEEPSEEK_MODEL",
+    defaultModel: "deepseek-reasoner",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
     role: "",
     systemPrompt: "",
-    accentColor: "#111111"
+    accentColor: "#246b4f"
   },
   {
     id: "gemini",
     name: "Gemini",
-    provider: "mock",
-    model: "gemini-2.0-flash",
+    provider: "gemini",
+    modelEnv: "GEMINI_MODEL",
+    defaultModel: "gemini-2.5-pro",
+    apiKeyEnv: "GEMINI_API_KEY",
     role: "",
     systemPrompt: "",
     accentColor: "#4c6fff"
   },
   {
-    id: "deepseek",
-    name: "DeepSeek",
-    provider: "mock",
-    model: "deepseek-chat",
+    id: "grok",
+    name: "Grok",
+    provider: "openai-compatible",
+    baseUrl: "https://api.x.ai/v1",
+    modelEnv: "XAI_MODEL",
+    defaultModel: "grok-3",
+    apiKeyEnv: "XAI_API_KEY",
     role: "",
     systemPrompt: "",
-    accentColor: "#246b4f"
+    accentColor: "#111111"
   }
 ];
 
@@ -41,29 +49,54 @@ function toNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveApiKey(agent) {
+  const explicitApiKey = String(agent.apiKey || "").trim();
+
+  if (explicitApiKey) {
+    return explicitApiKey;
+  }
+
+  const apiKeyEnv = String(agent.apiKeyEnv || "").trim();
+
+  if (!apiKeyEnv) {
+    return "";
+  }
+
+  return String(process.env[apiKeyEnv] || "").trim();
+}
+
 function normalizeAgent(agent, index) {
   const id = String(agent.id || `agent-${index + 1}`).trim();
   const provider = String(agent.provider || "mock").trim();
-  const model = String(agent.model || `${provider}-${id}`).trim();
+  const fallbackModel =
+    String(agent.defaultModel || `${provider}-${id}`).trim();
+  const modelEnv = String(agent.modelEnv || "").trim();
+  const model = String(
+    agent.model || (modelEnv ? process.env[modelEnv] : "") || fallbackModel
+  ).trim();
+  const apiKeyEnv = String(agent.apiKeyEnv || "").trim();
+  const apiKey = resolveApiKey(agent);
 
   return {
     id,
     name: String(agent.name || id).trim(),
     provider,
     model,
-    role: String(agent.role || "Collaborator").trim(),
+    role: String(agent.role || "").trim(),
     systemPrompt: String(agent.systemPrompt || "").trim(),
     baseUrl: String(agent.baseUrl || "").trim(),
-    apiKey: String(agent.apiKey || "").trim(),
+    apiKey,
+    apiKeyEnv,
     temperature: toNumber(agent.temperature, 0.7),
     maxTokens: toNumber(agent.maxTokens, 900),
-    accentColor: String(agent.accentColor || DEFAULT_COLORS[index % DEFAULT_COLORS.length]).trim()
+    accentColor: String(agent.accentColor || DEFAULT_COLORS[index % DEFAULT_COLORS.length]).trim(),
+    configured: provider === "mock" || Boolean(apiKey)
   };
 }
 
 function parseAgents(rawAgents) {
   if (!rawAgents || !String(rawAgents).trim()) {
-    return FALLBACK_AGENTS;
+    return DEFAULT_AGENT_PRESETS.map(normalizeAgent);
   }
 
   let parsedAgents;
@@ -88,5 +121,7 @@ const config = {
   requestTimeoutMs: toNumber(process.env.REQUEST_TIMEOUT_MS, 90000),
   agents: parseAgents(process.env.AI_AGENTS_JSON)
 };
+
+config.mockMode = !config.agents.some((agent) => agent.provider !== "mock" && agent.configured);
 
 module.exports = config;

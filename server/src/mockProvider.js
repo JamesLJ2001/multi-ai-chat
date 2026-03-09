@@ -1,18 +1,18 @@
 const MODEL_VARIANTS = {
-  chatgpt: {
-    initialLead: "结论：可以直接从最小可运行版本开始。",
-    refinedLead: "结论：先把最关键的主流程做成，再补细节。",
-    closing: "先跑通，再优化，是这类问题最稳的路径。"
+  deepseek: {
+    initialLead: "最稳妥的方案是先做核心，再处理风险点。",
+    refinedLead: "最终建议是优先解决最容易卡住上线的部分。",
+    closing: "把风险提前处理，后续返工会少很多。"
   },
   gemini: {
     initialLead: "可以直接按一个清晰的顺序推进。",
     refinedLead: "更简洁的做法是把步骤压缩成一条最短路径。",
     closing: "顺序清楚，执行成本会显著下降。"
   },
-  deepseek: {
-    initialLead: "最稳妥的方案是先做核心，再处理风险点。",
-    refinedLead: "最终建议是优先解决最容易卡住上线的部分。",
-    closing: "把风险提前处理，后续返工会少很多。"
+  grok: {
+    initialLead: "先把结论压缩到最短执行路径，效率最高。",
+    refinedLead: "更新后的建议是把步骤再收紧，减少无关动作。",
+    closing: "路径越短，落地速度越快。"
   }
 };
 

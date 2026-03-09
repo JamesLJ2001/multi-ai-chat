@@ -2,6 +2,12 @@ function normalizeBaseUrl(baseUrl) {
   return baseUrl.replace(/\/+$/, "");
 }
 
+function createProviderError(message, details = {}) {
+  const error = new Error(message);
+  Object.assign(error, details);
+  return error;
+}
+
 function extractTextContent(content) {
   if (typeof content === "string") {
     return content.trim();
@@ -29,7 +35,9 @@ function extractTextContent(content) {
 
 async function createOpenAiCompatibleResponse({ agent, messages, signal }) {
   if (!agent.baseUrl || !agent.apiKey) {
-    throw new Error(`Agent "${agent.name}" is missing baseUrl or apiKey.`);
+    throw createProviderError(`Agent "${agent.name}" is missing baseUrl or apiKey.`, {
+      code: "agent_not_configured"
+    });
   }
 
   const response = await fetch(`${normalizeBaseUrl(agent.baseUrl)}/chat/completions`, {
@@ -48,8 +56,11 @@ async function createOpenAiCompatibleResponse({ agent, messages, signal }) {
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw new Error(`Agent "${agent.name}" request failed with ${response.status}: ${bodyText.slice(0, 240)}`);
+    await response.text().catch(() => "");
+    throw createProviderError(`Agent "${agent.name}" request failed.`, {
+      statusCode: response.status,
+      code: "upstream_error"
+    });
   }
 
   const data = await response.json();
@@ -57,7 +68,10 @@ async function createOpenAiCompatibleResponse({ agent, messages, signal }) {
   const text = extractTextContent(content);
 
   if (!text) {
-    throw new Error(`Agent "${agent.name}" returned an empty response.`);
+    throw createProviderError(`Agent "${agent.name}" returned an empty response.`, {
+      statusCode: 502,
+      code: "empty_response"
+    });
   }
 
   return text;
