@@ -4,9 +4,9 @@ function createProviderError(message, details = {}) {
   return error;
 }
 
-function extractTextContent(content) {
+function extractRawTextContent(content) {
   if (typeof content === "string") {
-    return content.trim();
+    return content;
   }
 
   if (Array.isArray(content)) {
@@ -22,11 +22,14 @@ function extractTextContent(content) {
 
         return "";
       })
-      .join("\n")
-      .trim();
+      .join("");
   }
 
   return "";
+}
+
+function extractTextContent(content) {
+  return extractRawTextContent(content).trim();
 }
 
 function buildGeminiRequest(messages, agent) {
@@ -78,6 +81,23 @@ function extractGeminiText(data) {
   return "";
 }
 
+function extractGeminiChunkText(data) {
+  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+
+  for (const candidate of candidates) {
+    const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+    const text = parts
+      .map((part) => (typeof part?.text === "string" ? part.text : ""))
+      .join("");
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
 async function createGeminiResponse({ agent, messages, signal }) {
   if (!agent.apiKey) {
     throw createProviderError(`Agent "${agent.name}" is missing apiKey.`, {
@@ -117,6 +137,114 @@ async function createGeminiResponse({ agent, messages, signal }) {
   return text;
 }
 
+async function streamGeminiResponse({ agent, messages, signal, onDelta }) {
+  if (!agent.apiKey) {
+    throw createProviderError(`Agent "${agent.name}" is missing apiKey.`, {
+      code: "agent_not_configured"
+    });
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(agent.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(agent.apiKey)}`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    signal,
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(buildGeminiRequest(messages, agent))
+  });
+
+  if (!response.ok) {
+    await response.text().catch(() => "");
+    throw createProviderError(`Agent "${agent.name}" request failed.`, {
+      statusCode: response.status,
+      code: "upstream_error"
+    });
+  }
+
+  if (!response.body) {
+    throw createProviderError(`Agent "${agent.name}" returned an empty stream.`, {
+      statusCode: 502,
+      code: "empty_response"
+    });
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = "";
+  let fullText = "";
+  const processLine = (rawLine) => {
+    const line = rawLine.trim();
+
+    if (!line.startsWith("data:")) {
+      return;
+    }
+
+    const payload = line.slice(5).trim();
+
+    if (!payload) {
+      return;
+    }
+
+    let data;
+
+    try {
+      data = JSON.parse(payload);
+    } catch (error) {
+      return;
+    }
+
+    const nextText = extractGeminiChunkText(data);
+
+    if (!nextText) {
+      return;
+    }
+
+    const delta = nextText.startsWith(fullText) ? nextText.slice(fullText.length) : nextText;
+
+    if (!delta) {
+      return;
+    }
+
+    fullText += delta;
+    onDelta(delta);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      buffer += decoder.decode();
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+
+    for (const rawLine of lines) {
+      processLine(rawLine);
+    }
+  }
+
+  if (buffer.trim()) {
+    for (const rawLine of buffer.split(/\r?\n/)) {
+      processLine(rawLine);
+    }
+  }
+
+  if (!fullText.trim()) {
+    throw createProviderError(`Agent "${agent.name}" returned an empty response.`, {
+      statusCode: 502,
+      code: "empty_response"
+    });
+  }
+
+  return fullText;
+}
+
 module.exports = {
-  createGeminiResponse
+  createGeminiResponse,
+  streamGeminiResponse
 };
