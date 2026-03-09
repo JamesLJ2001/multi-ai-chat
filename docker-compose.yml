@@ -28,7 +28,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-reasoner}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-pro}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       XAI_MODEL: ${XAI_MODEL:-grok-3}
       AI_AGENTS_JSON: ${AI_AGENTS_JSON:-}
     depends_on:

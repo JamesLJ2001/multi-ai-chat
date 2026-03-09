@@ -22,7 +22,7 @@ const DEFAULT_AGENT_PRESETS = [
     name: "Gemini",
     provider: "gemini",
     modelEnv: "GEMINI_MODEL",
-    defaultModel: "gemini-2.5-pro",
+    defaultModel: "gemini-2.5-flash",
     apiKeyEnv: "GEMINI_API_KEY",
     role: "",
     systemPrompt: "",

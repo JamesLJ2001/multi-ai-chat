@@ -71,7 +71,7 @@ GEMINI_API_KEY=your-local-key
 XAI_API_KEY=your-local-key
 
 DEEPSEEK_MODEL=deepseek-reasoner
-GEMINI_MODEL=gemini-2.5-pro
+GEMINI_MODEL=gemini-2.5-flash
 XAI_MODEL=grok-3
 ```
 
