@@ -6,31 +6,31 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const FALLBACK_AGENTS = [
   {
-    id: "atlas",
-    name: "Atlas",
+    id: "chatgpt",
+    name: "ChatGPT",
     provider: "mock",
-    model: "strategy-alpha",
-    role: "Analyst",
-    systemPrompt: "擅长拆分问题、澄清约束、识别风险。",
-    accentColor: "#d1603d"
+    model: "gpt-4.1-mini",
+    role: "",
+    systemPrompt: "",
+    accentColor: "#111111"
   },
   {
-    id: "harbor",
-    name: "Harbor",
+    id: "gemini",
+    name: "Gemini",
     provider: "mock",
-    model: "debate-beta",
-    role: "Challenger",
-    systemPrompt: "擅长挑出薄弱假设，提出反例。",
-    accentColor: "#2b7a78"
+    model: "gemini-2.0-flash",
+    role: "",
+    systemPrompt: "",
+    accentColor: "#4c6fff"
   },
   {
-    id: "lumen",
-    name: "Lumen",
+    id: "deepseek",
+    name: "DeepSeek",
     provider: "mock",
-    model: "synthesis-gamma",
-    role: "Synthesizer",
-    systemPrompt: "擅长收敛观点，给出清晰结论与执行路径。",
-    accentColor: "#f2a541"
+    model: "deepseek-chat",
+    role: "",
+    systemPrompt: "",
+    accentColor: "#246b4f"
   }
 ];
 

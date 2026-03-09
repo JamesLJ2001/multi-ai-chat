@@ -73,13 +73,11 @@ async function executeRound({ conversationId, question, roundNumber, mode, previ
 
     const messages =
       mode === "initial"
-        ? buildInitialMessages({ agent, question })
+        ? buildInitialMessages({ question })
         : buildIterationMessages({
-            agent,
             question,
             previousSelfResponse: previousSelf?.responseText || "",
-            peerResponses,
-            roundNumber
+            peerResponses
           });
 
     try {
@@ -137,6 +135,7 @@ async function executeRound({ conversationId, question, roundNumber, mode, previ
   const responses = await Promise.all(jobs);
   return {
     round,
+    responses,
     hasFailures: responses.some((item) => item.status !== "completed")
   };
 }
@@ -155,10 +154,11 @@ async function createConversation(questionInput) {
   const conversation = await db.createConversation(question);
   await db.updateConversationStatus(conversation.id, "running");
 
+  let hasFailures = false;
   let finalStatus = "completed";
 
   try {
-    const result = await executeRound({
+    const initialResult = await executeRound({
       conversationId: conversation.id,
       question,
       roundNumber: 1,
@@ -166,9 +166,18 @@ async function createConversation(questionInput) {
       previousResponses: []
     });
 
-    if (result.hasFailures) {
-      finalStatus = "completed_with_errors";
-    }
+    hasFailures = hasFailures || initialResult.hasFailures;
+
+    const refinementResult = await executeRound({
+      conversationId: conversation.id,
+      question,
+      roundNumber: 2,
+      mode: "iteration",
+      previousResponses: initialResult.responses
+    });
+
+    hasFailures = hasFailures || refinementResult.hasFailures;
+    finalStatus = hasFailures ? "completed_with_errors" : "completed";
   } catch (error) {
     finalStatus = "failed";
     throw error;

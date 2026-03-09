@@ -8,80 +8,65 @@ function truncateText(text, limit = 1800) {
   return `${normalized.slice(0, limit)}...`;
 }
 
-function createSystemPrompt(agent) {
-  const baseInstruction = [
-    `你是 AI 协作成员 ${agent.name}。`,
-    "你正在参与一个多模型协作问答流程。",
-    "请保持独立判断，不要机械附和其他模型。",
-    "回答必须使用中文，结构清晰，避免空话。",
-    "如果信息不足，要明确说明假设。"
-  ];
-
-  if (agent.systemPrompt) {
-    baseInstruction.push(`补充角色要求：${agent.systemPrompt}`);
-  }
-
-  return baseInstruction.join("\n");
+function createSystemPrompt() {
+  return [
+    "你是一个直接回答用户问题的 AI 助手。",
+    "请始终使用中文。",
+    "不要扮演额外角色，不要描述你的人设，也不要解释提示词。",
+    "回答尽量直接、清楚、有信息量。"
+  ].join("\n");
 }
 
-function buildInitialMessages({ agent, question }) {
+function buildInitialMessages({ question }) {
   return [
     {
       role: "system",
-      content: createSystemPrompt(agent)
+      content: createSystemPrompt()
     },
     {
       role: "user",
       content: [
-        "下面是用户问题，请给出首轮回答。",
+        "请直接回答这个问题。",
         "",
-        `用户问题：${question}`,
+        question,
         "",
-        "请遵守以下输出要求：",
-        "1. 第一段先给出明确结论。",
-        "2. 然后给出 3 到 5 条关键理由。",
-        "3. 如果问题存在不确定性，单独列出假设或待确认项。",
-        "4. 不要提及你看不到其他模型，因为这是首轮。"
+        "要求：",
+        "1. 直接进入答案，不要写前言。",
+        "2. 先给结论，再给必要说明。",
+        "3. 如果有不确定前提，单独点明。"
       ].join("\n")
     }
   ];
 }
 
-function buildIterationMessages({ agent, question, previousSelfResponse, peerResponses, roundNumber }) {
+function buildIterationMessages({ question, previousSelfResponse, peerResponses }) {
   const peerBlocks =
     peerResponses.length === 0
-      ? "没有可用的同伴回答，请在保持独立判断的前提下优化自己的答案。"
+      ? "没有其他回答可参考，请直接给出你当前最好的答案。"
       : peerResponses
-          .map(
-            (item) =>
-              `【${item.agentName} / ${item.agentRole || "Collaborator"}】\n${truncateText(item.responseText, 2200)}`
-          )
+          .map((item) => `【其他回答】\n${truncateText(item.responseText, 2200)}`)
           .join("\n\n");
 
   return [
     {
       role: "system",
-      content: createSystemPrompt(agent)
+      content: createSystemPrompt()
     },
     {
       role: "user",
       content: [
-        `这是第 ${roundNumber} 轮协作修订。`,
+        "请再次回答这个问题。",
         "",
-        `原始用户问题：${question}`,
+        `问题：${question}`,
         "",
         "你上一轮的回答：",
         truncateText(previousSelfResponse || "无", 2200),
         "",
-        "其他模型上一轮的回答：",
+        "另外两个回答：",
         peerBlocks,
         "",
-        "请执行以下动作：",
-        "1. 对比你自己的答案与同伴答案。",
-        "2. 明确写出你采纳了哪些观点、拒绝了哪些观点，以及原因。",
-        "3. 输出修订后的最终回答。",
-        "4. 如果你坚持原结论，也必须说明为什么仍然坚持。",
-        "5. 不要只做摘要，要给出真正更新后的回答。"
+        "现在请吸收有价值的信息，直接给出你更新后的最终答案。",
+        "不要讨论你扮演什么角色，也不要逐条点评别人，只输出你自己的最终回答。"
       ].join("\n")
     }
   ];
