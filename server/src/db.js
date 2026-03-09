@@ -300,7 +300,7 @@ async function insertAgentResponse(input) {
       input.status,
       input.responseText,
       input.errorMessage || null,
-      input.peerContext || []
+      JSON.stringify(input.peerContext || [])
     ]
   );
 }
