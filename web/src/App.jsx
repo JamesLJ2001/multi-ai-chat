@@ -2,7 +2,7 @@ import { startTransition, useEffect, useState } from "react";
 
 const defaultAgents = [
   { id: "deepseek", name: "DeepSeek", accentColor: "#246b4f", model: "deepseek-reasoner" },
-  { id: "gemini", name: "Gemini", accentColor: "#4c6fff", model: "gemini-2.5-pro" },
+  { id: "gemini", name: "Gemini", accentColor: "#4c6fff", model: "gemini-2.5-flash" },
   { id: "grok", name: "Grok", accentColor: "#111111", model: "grok-3" }
 ];
 
