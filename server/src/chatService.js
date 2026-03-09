@@ -1,0 +1,242 @@
+const config = require("./config");
+const db = require("./db");
+const { createMockResponse } = require("./mockProvider");
+const { createOpenAiCompatibleResponse } = require("./openAiCompatibleProvider");
+const { buildInitialMessages, buildIterationMessages } = require("./prompts");
+
+function publicAgent(agent) {
+  return {
+    id: agent.id,
+    name: agent.name,
+    provider: agent.provider,
+    model: agent.model,
+    role: agent.role,
+    systemPrompt: agent.systemPrompt,
+    baseUrl: agent.baseUrl,
+    accentColor: agent.accentColor
+  };
+}
+
+function normalizeQuestion(question) {
+  return String(question || "").replace(/\r/g, "").trim();
+}
+
+function clampRounds(rounds) {
+  const value = Number(rounds);
+
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.min(5, Math.max(1, Math.floor(value)));
+}
+
+function badRequest(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
+}
+
+async function runAgent(agent, messages, runtime) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+
+  try {
+    if (agent.provider === "openai-compatible") {
+      return await createOpenAiCompatibleResponse({
+        agent,
+        messages,
+        signal: controller.signal
+      });
+    }
+
+    return createMockResponse({
+      agent,
+      question: runtime.question,
+      roundNumber: runtime.roundNumber,
+      peerResponses: runtime.peerResponses,
+      previousSelfResponse: runtime.previousSelfResponse
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function executeRound({ conversationId, question, roundNumber, mode, previousResponses }) {
+  const round = await db.createRound(conversationId, roundNumber, mode);
+
+  const jobs = config.agents.map(async (agent) => {
+    const previousSelf = previousResponses.find((item) => item.agentId === agent.id);
+    const peerResponses = previousResponses.filter(
+      (item) => item.agentId !== agent.id && item.status === "completed"
+    );
+
+    const messages =
+      mode === "initial"
+        ? buildInitialMessages({ agent, question })
+        : buildIterationMessages({
+            agent,
+            question,
+            previousSelfResponse: previousSelf?.responseText || "",
+            peerResponses,
+            roundNumber
+          });
+
+    try {
+      const responseText = await runAgent(agent, messages, {
+        question,
+        roundNumber,
+        peerResponses,
+        previousSelfResponse: previousSelf?.responseText || ""
+      });
+
+      const payload = {
+        conversationId,
+        roundId: round.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        agentRole: agent.role,
+        model: agent.model,
+        baseUrl: agent.baseUrl,
+        status: "completed",
+        responseText,
+        errorMessage: null,
+        peerContext: peerResponses.map((item) => ({
+          agentId: item.agentId,
+          agentName: item.agentName,
+          excerpt: String(item.responseText || "").slice(0, 200)
+        }))
+      };
+
+      await db.insertAgentResponse(payload);
+      return payload;
+    } catch (error) {
+      const payload = {
+        conversationId,
+        roundId: round.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        agentRole: agent.role,
+        model: agent.model,
+        baseUrl: agent.baseUrl,
+        status: "failed",
+        responseText: `[${agent.name}] 调用失败，未生成有效回答。`,
+        errorMessage: error.message,
+        peerContext: peerResponses.map((item) => ({
+          agentId: item.agentId,
+          agentName: item.agentName,
+          excerpt: String(item.responseText || "").slice(0, 200)
+        }))
+      };
+
+      await db.insertAgentResponse(payload);
+      return payload;
+    }
+  });
+
+  const responses = await Promise.all(jobs);
+  return {
+    round,
+    hasFailures: responses.some((item) => item.status !== "completed")
+  };
+}
+
+async function createConversation(questionInput) {
+  const question = normalizeQuestion(questionInput);
+
+  if (!question) {
+    throw badRequest("Question is required.");
+  }
+
+  if (question.length > 4000) {
+    throw badRequest("Question is too long. Please keep it within 4000 characters.");
+  }
+
+  const conversation = await db.createConversation(question);
+  await db.updateConversationStatus(conversation.id, "running");
+
+  let finalStatus = "completed";
+
+  try {
+    const result = await executeRound({
+      conversationId: conversation.id,
+      question,
+      roundNumber: 1,
+      mode: "initial",
+      previousResponses: []
+    });
+
+    if (result.hasFailures) {
+      finalStatus = "completed_with_errors";
+    }
+  } catch (error) {
+    finalStatus = "failed";
+    throw error;
+  } finally {
+    await db.updateConversationStatus(conversation.id, finalStatus);
+  }
+
+  return db.getConversationById(conversation.id);
+}
+
+async function iterateConversation(conversationId, requestedRounds) {
+  const roundsToRun = clampRounds(requestedRounds);
+  let currentConversation = await db.getConversationById(conversationId);
+
+  if (!currentConversation) {
+    return null;
+  }
+
+  await db.updateConversationStatus(conversationId, "running");
+
+  let hasFailures = false;
+
+  try {
+    for (let step = 0; step < roundsToRun; step += 1) {
+      currentConversation = await db.getConversationById(conversationId);
+      const previousRound = currentConversation.rounds[currentConversation.rounds.length - 1];
+
+      const result = await executeRound({
+        conversationId,
+        question: currentConversation.question,
+        roundNumber: previousRound ? previousRound.roundNumber + 1 : 1,
+        mode: previousRound ? "iteration" : "initial",
+        previousResponses: previousRound ? previousRound.responses : []
+      });
+
+      if (result.hasFailures) {
+        hasFailures = true;
+      }
+    }
+  } catch (error) {
+    await db.updateConversationStatus(conversationId, "failed");
+    throw error;
+  }
+
+  await db.updateConversationStatus(
+    conversationId,
+    hasFailures ? "completed_with_errors" : "completed"
+  );
+
+  return db.getConversationById(conversationId);
+}
+
+async function listConversations() {
+  return db.listConversations();
+}
+
+async function getConversationById(conversationId) {
+  return db.getConversationById(conversationId);
+}
+
+function getAgents() {
+  return config.agents.map(publicAgent);
+}
+
+module.exports = {
+  createConversation,
+  iterateConversation,
+  listConversations,
+  getConversationById,
+  getAgents
+};
